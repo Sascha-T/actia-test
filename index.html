@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+</head>
+<script>
+    function onload() {
+        console.log(navigator.usb)
+        if (navigator.usb == null) {
+            document.body.innerHTML = "you need to use a webUSB capable browser"
+        }
+        if (location.protocol === "http:") {
+            document.body.innerHTML = "you need to connect over https to use webUSB"
+        }
+    }
+
+    function button(a) {
+        (a ? () => {
+            document.querySelector("#start").removeAttribute("disabled")
+        } : () => {
+            document.querySelector("#start").setAttribute("disabled", "true")
+        })()
+    }
+
+    function hex(data) {
+        let arr = [...new Uint8Array(data)];
+        let ret = "";
+        for (let i = 0; i < arr.length; i++) {
+            ret += arr[i].toString(16).padStart(2, "0") + " ";
+        }
+        return ret;
+    }
+    window.hex = hex;
+
+    function fail(text) {
+        alert(text);
+        button(true);
+    }
+
+    async function getStatus(device) {
+        await send(device, [0x41, 0x05, 0x01, 0xC0])
+        await readAck(device);
+    }
+    async function readAck(device) {
+        let transfer = await device.transferIn(5, 64);
+        console.log("fl: " + hex(transfer.data.buffer))
+    }
+    async function sendAck(device, cmd) {
+        await send(device, [0x06, cmd, 0x05], true)
+    }
+    async function read(device, size) {
+        let dat = await device.transferIn(5, size)
+        console.log("in("+ dat.data.buffer.byteLength +"): " + hex(dat.data.buffer))
+        return dat;
+    }
+    async function send(device, data, no_chk) {
+        if(no_chk == null) {
+            let sum = 0;
+            for (let i = 0; i < data.length; i++) {
+                sum += data[i];
+            }
+            data.push((~sum & 0xFF) & 0xFF)
+        }
+        let buf = new Uint8Array(data);
+        console.log("out: " + hex(buf))
+        await device.transferOut(6, buf);
+    }
+
+    async function begin() {
+        button(false);
+
+        device = await navigator.usb.requestDevice({
+            filters: [{ vendorId: 0x103a }]
+        }).catch(() => device = null);
+        if(device == null)
+            return fail("failed to acquire actia xs evo");
+        await device.open().catch((e) => console.log(e))
+        if(!device.opened)
+            return fail("failed to open actia xs evo");
+        await device.selectConfiguration(1);
+        await device.claimInterface(0);
+
+
+        await send(device, [
+            0x40 /* command */, 0x05, 0x15, 0xc0, // header
+            0x00, 0xfa, 0x00, 0x00,
+            0xaa, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00
+        ])
+        await readAck(device);
+        await getStatus(device);
+
+        /*let val = transfer.data.getUint8(0) + transfer.data.getUint8(1) << 8 + transfer.data.getUint8(2) << 16;
+        if(val !== -1073741824)
+            return fail("device did not acknowledge: " + [... new Uint8Array(transfer.data.buffer)].map(x => x.toString(16).padStart(2, "0")).join(" "));*/
+        await send(device, [0x43, 0x05, 0x01, 0xc0]);
+
+        transfer = await read(device, 256);
+        let version = new TextDecoder("ascii").decode(transfer.data.buffer).slice(24, -2).replaceAll("\x00", " ")
+        alert(version);
+        await sendAck(device, 0x44);
+
+        await send(device, [
+            0x40, 0x05, 0x17, 0xc0,
+            0x00, 0x09, 0x02, 0x00, 0xaa, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0xC0, 0x40
+        ])
+        await readAck(device);
+        await getStatus(device);
+        await send(device, [0x43, 0x05, 0x01, 0xc0]);
+        let _data = transfer = await read(device, 256);
+        let array = new Uint8Array(_data.data.buffer)
+
+        console.log([... array.subarray(24, -1)])
+
+        button(true);
+    }
+
+</script>
+<body onload="onload()">
+<button id="start" onclick="begin()">start doing the thing</button>
+
+</body>
+</html>
